@@ -63,6 +63,13 @@ var (
 //     and nothing else.
 //   - Directories, regular files, symlinks and hard links are reproduced;
 //     unsupported entry types (fifos, devices, ...) are skipped.
+//   - A hard link whose link(2) is REFUSED becomes a copy, with the source's
+//     permissions. Android denies link(2) on /data while allowing symlink(2),
+//     and gnu.org/glibc hard-links its getconf variants, so one refused syscall
+//     made the implicit libc closure unreachable there. Two names for one inode
+//     is an optimisation; "these paths hold the same content" is the claim, and
+//     a copy makes it at the cost of disk. Both errors are reported if the copy
+//     fails too.
 //
 // What it does NOT promise: a symlink ENTRY may point anywhere, including out
 // of dest, which is what tar(1) does and what an artifact's relative links need.
@@ -121,7 +128,40 @@ func Extract(tr *tar.Reader, dest string, strip int) error {
 			}
 			_ = os.Remove(target)
 			if err := extLink(source, target); err != nil {
-				return err
+				// ⛔ A HARD LINK IS AN OPTIMISATION, NOT A SEMANTIC. Two names
+				// for one inode saves bytes; what the archive is SAYING is
+				// "these two paths hold the same content". A copy says the same
+				// thing and costs disk, so refusing to install because link(2)
+				// was unavailable trades a working installation for space.
+				//
+				// Measured on a Pixel 11 Pro Fold, Android 17, 2026-11-14:
+				// link(2) is denied and symlink(2) is allowed on /data/local/tmp
+				// (Android's protected_hardlinks/SELinux policy), isolated with
+				// `ln` and `ln -s` on the same file. gnu.org/glibc's artifact
+				// hard-links the getconf variants, so `zpkm install -s` died
+				// there and the whole implicit libc closure was unreachable —
+				// one denied syscall, on an archive that unpacks everywhere
+				// else. See go-zpkg/artifact#235.
+				//
+				// A COPY and not a symlink: a symlink is observably different
+				// (lstat, readlink, and a relative target that breaks if the
+				// tree is moved), while a copy differs only in st_nlink and
+				// st_ino. The archive's intent is the bytes.
+				//
+				// BOTH errors travel when the fallback also fails: told only
+				// about the copy, a reader would hunt a disk-space or
+				// permission problem and never learn that link(2) is refused
+				// here, which is the fact that explains every other symptom.
+				// BOTH are wrapped, not one formatted into the other's text: a
+				// caller testing errors.Is(err, fs.ErrNotExist) is asking
+				// "was the source missing?" and a caller testing
+				// errors.Is(err, syscall.EPERM) is asking "is link(2) refused
+				// here?". Those are different remedies, and a %v would leave
+				// the second question answerable only by reading prose.
+				if cerr := extCopyLink(source, target); cerr != nil {
+					return fmt.Errorf("hard link %q -> %q: %w; copying instead: %w",
+						target, source, err, cerr)
+				}
 			}
 		case tar.TypeReg:
 			if err := extSafeParents(dest, target); err != nil {
@@ -288,6 +328,26 @@ func extPermOr(m, fallback fs.FileMode) fs.FileMode {
 		return p
 	}
 	return fallback
+}
+
+// extCopyLink reproduces a hard-link entry as a copy, for a filesystem that
+// refuses link(2). See the TypeLink branch for why a copy rather than a refusal
+// or a symlink.
+//
+// The mode comes from the SOURCE file, not from the entry header: a hard link
+// shares an inode, so it shares the permissions, and a tar hard-link header
+// carries a mode that nothing on a real filesystem would have applied.
+var extCopyLink = func(source, target string) error {
+	fi, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
+	f, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return extWriteFile(target, extPermOr(fi.Mode(), 0o644), f)
 }
 
 // extWriteFile creates target with perm and copies r into it.

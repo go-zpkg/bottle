@@ -257,7 +257,18 @@ func TestExtractSeamErrors(t *testing.T) {
 				return os.MkdirAll(p, m)
 			})
 		}},
-		{"hardlink create", linkTar, func() func() { return swap(&extLink, func(string, string) error { return boom }) }},
+		// ⛔ BOTH SEAMS, BECAUSE A REFUSED link(2) IS NO LONGER AN ERROR. This
+		// case used to fail extLink alone, and that is now the FALLBACK path
+		// (Android denies link(2); see the TypeLink branch), so the entry is
+		// copied and the extraction succeeds. The hardlink branch still has an
+		// error to reach — it needs the copy to fail too, which is what this
+		// table is for. The fallback's own behaviour is held in
+		// hardlinkfallback_test.go.
+		{"hardlink create and copy", linkTar, func() func() {
+			undoLink := swap(&extLink, func(string, string) error { return boom })
+			undoCopy := swap(&extCopyLink, func(string, string) error { return boom })
+			return func() { undoCopy(); undoLink() }
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
