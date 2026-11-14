@@ -39,9 +39,31 @@ func nlink(t *testing.T, path string) uint64 {
 	return uint64(st.Nlink)
 }
 
+// linkWorks reports whether this filesystem will create a hard link at all.
+//
+// ⛔ IT IS PROBED, NOT ASSUMED FROM THE PLATFORM. The test below asserts that
+// a real hard link is still made where link(2) is allowed, and that assertion
+// is false wherever it is not — Android's /data denies it, and so does
+// wasip1 under wasmtime, which is how this was found: the suite was green on
+// darwin and linux and red on the wasm lane, for the very reason the change
+// is about. A GOOS list would have to be kept in step with every runtime's
+// policy; one syscall answers for the filesystem actually under the test.
+func linkWorks(t *testing.T) bool {
+	t.Helper()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "probe")
+	if err := os.WriteFile(src, []byte("x"), 0o644); err != nil {
+		t.Fatalf("writing the probe: %v", err)
+	}
+	return os.Link(src, filepath.Join(dir, "probe-link")) == nil
+}
+
 // A filesystem that allows link(2) must still get a real hard link: the
 // fallback is for the refusal, not a replacement for the mechanism.
 func TestAHardLinkIsStillAHardLinkWhereLinkIsAllowed(t *testing.T) {
+	if !linkWorks(t) {
+		t.Skip("link(2) is refused on this filesystem, which is the case the FALLBACK covers")
+	}
 	dest := t.TempDir()
 	if err := extract(linkPair(t), dest, 0); err != nil {
 		t.Fatalf("extract: %v", err)
