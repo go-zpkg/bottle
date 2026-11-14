@@ -119,14 +119,26 @@ func TestALinkRefusedBecomesACopyWithTheSameContent(t *testing.T) {
 	if lfi.Mode()&os.ModeSymlink != 0 {
 		t.Error("the fallback produced a SYMLINK; the archive's intent is the bytes, and a symlink is observably different")
 	}
-	// The mode comes from the SOURCE file, because a hard link shares an inode
+	// The mode comes from the SOURCE FILE, because a hard link shares an inode
 	// and therefore its permissions.
+	//
+	// ⛔ COMPARED AGAINST THE SOURCE, NOT AGAINST 0755. The literal was what
+	// the archive asked for and what darwin and linux stored, so the test
+	// passed there and went red on wasip1 under wasmtime, which extracted the
+	// source itself as 0600: the code had faithfully copied the source's mode
+	// and the EXPECTATION was wrong. What the contract claims is "the same
+	// permissions as the source", and only the source can say what those are
+	// on the filesystem actually under the test.
+	src, err := os.Stat(filepath.Join(dest, "bin/getconf"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	fi, err := os.Stat(target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fi.Mode().Perm(); got != 0o755 {
-		t.Errorf("perm = %o, want 755 — taken from the source, not the link header", got)
+	if got, want := fi.Mode().Perm(), src.Mode().Perm(); got != want {
+		t.Errorf("perm = %o, want %o — the source's, not the link header's", got, want)
 	}
 }
 
