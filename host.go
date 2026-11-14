@@ -49,6 +49,29 @@ import "runtime"
 // plan9 would be answered wrongly in the same silent way. They are not targets
 // today, and widening the list for a platform with no witness is how a guess
 // gets mistaken for support.
+//
+// ⭐ AND ANDROID NOW HAS ITS WITNESS, so that sentence is a measurement rather
+// than a reasonable guess. On a Pixel 11 Pro Fold running Android 17
+// (arm64-v8a), 2026-11-14: `zpkm` built CGO_ENABLED=0 GOOS=linux GOARCH=arm64
+// resolved linux/aarch64, installed lz4.org v1.10.0 with the gnu.org/glibc
+// closure, and ran it — `zpkm run lz4.org -- --version` exit 0. The linux
+// artifacts work there, so answering "linux" is CORRECT and not a silent
+// wrong answer.
+//
+// ⛔ WHICH IS WHY ANDROID MUST NOT BE ADDED TO THE LIST ABOVE. It looks like
+// the same tidy-up the BSDs got, and it is the opposite: naming it would make
+// a GOOS=android build resolve android/aarch64, for which nothing is
+// published, so a platform that works today would start refusing. The BSDs
+// were named because the fallback's answer was WRONG for them; here it is
+// right. (go-zpkg/artifact#235 was filed proposing exactly that change, by me,
+// before any of this was measured.)
+//
+// Note also that the fallback is unreachable from the binary people actually
+// run: runtime.GOOS is a property of the BUILD, and the published zpkm is a
+// linux/arm64 binary, so it reports "linux" on a phone and never reaches the
+// android case at all. Two probes of one source, built for the two GOOS
+// values and run on the same device, reported "linux" and "android"
+// respectively.
 func osSlug(g string) string {
 	switch g {
 	case "darwin":
